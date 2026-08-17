@@ -1,0 +1,1 @@
+export { PricingCheckoutView } from './PricingCheckoutView';

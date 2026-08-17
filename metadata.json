@@ -1,0 +1,8 @@
+{
+  "name": "Remix Perbaikan v2",
+  "description": "Workspace AI All-in-One untuk Kreator \u0026 Afiliator: Generator Ide Konten, TikTok Downloader, Video to Prompt AI Splitter, Prompt Foto Nano Ultra, Ekstraktor Frame, dan Console Super Admin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
