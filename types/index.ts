@@ -51,41 +51,13 @@ export interface Transaction {
 
 export interface GenerationHistoryItem {
   id: string;
-  toolType: 'ide_konten' | 'video_to_prompt' | 'prompt_foto' | 'tiktok_downloader' | 'tiktok_shop' | 'ekstraktor_frame' | 'auto_follback';
+  toolType: 'ide_konten' | 'video_to_prompt' | 'prompt_foto' | 'tiktok_downloader' | 'tiktok_shop' | 'ekstraktor_frame';
   title: string;
   previewText: string;
   fullData: any;
   createdAt: string;
   timestamp?: string;
   tags: string[];
-}
-
-export interface AutoFollbackTargetItem {
-  id: string;
-  username: string;
-  platform: 'tiktok' | 'instagram' | 'threads' | 'shopee';
-  displayName: string;
-  followerCount: number;
-  niche: string;
-  isPrivate: boolean;
-  hasProfilePic: boolean;
-  status: 'pending' | 'following' | 'followed' | 'skipped' | 'dm_sent';
-  aiGreeting?: string;
-  skipReason?: string;
-  processedAt?: string;
-}
-
-export interface AutoFollbackConfig {
-  platform: 'tiktok' | 'instagram' | 'threads' | 'shopee';
-  speedDelaySeconds: number;
-  jitterSeconds: number;
-  dailyLimit: number;
-  filterMinFollowers: number;
-  filterOnlyPublic: boolean;
-  filterRequireAvatar: boolean;
-  autoSendAiDm: boolean;
-  aiDmObjective: 'afiliasi' | 'sapaan' | 'komunitas' | 'diskon';
-  nicheFilter: string;
 }
 
 export interface SegmentPrompt {
@@ -159,6 +131,9 @@ export interface TikTokVideoMetadata {
   bookmarks: string;
   videoDuration: number;
   videoUrl: string;
+  videoUrlHd?: string;
+  videoUrlWatermarked?: string;
+  partialMetadataOnly?: boolean;
   coverUrl: string;
   audioTitle: string;
   audioAuthor: string;

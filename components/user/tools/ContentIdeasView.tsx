@@ -2,6 +2,8 @@
 
 import React, { useState, useRef } from 'react';
 import { useApp } from '@/lib/app-context';
+import { ApiClient } from '@/services/client/api-client';
+import { GEMINI_MODELS } from '@/server/config/model-tiers.config';
 import {
   Sparkles,
   Search,
@@ -21,6 +23,7 @@ import {
 export const ContentIdeasView: React.FC = () => {
   const { addHistoryItem, sendToTool, userApiKey } = useApp();
 
+  const [ideaCount, setIdeaCount] = useState<number>(5);
   const [tiktokUrl, setTiktokUrl] = useState('');
   const [videoTitleCaption, setVideoTitleCaption] = useState('');
   const [topicName, setTopicName] = useState('');
@@ -56,12 +59,7 @@ export const ContentIdeasView: React.FC = () => {
     if (!tiktokUrl.trim()) return;
     setFetchingTiktok(true);
     try {
-      const res = await fetch('/api/tiktok/info', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: tiktokUrl.trim() })
-      });
-      const data = await res.json();
+      const data = await ApiClient.scrapeTikTok({ url: tiktokUrl.trim() });
       if (data && data.success && data.data) {
         setVideoTitleCaption(data.data.caption || data.data.title || '');
         if (!topicName) {
@@ -96,25 +94,50 @@ export const ContentIdeasView: React.FC = () => {
 
     try {
       const promptQuery = topicName.trim() || videoTitleCaption.trim() || tiktokUrl.trim() || manualQueries.trim() || 'Ide Konten Kreator Viral';
-      const res = await fetch('/api/gemini/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskType: 'ide_konten',
-          prompt: `Judul: ${promptQuery}\nCaption: ${videoTitleCaption}\nURL: ${tiktokUrl}\nManual Queries: ${manualQueries}`,
-          customApiKey: userApiKey || undefined,
-          extraData: {
-            totalDuration,
-            splitDuration,
-            targetAeo,
-            enableAntiSlop: includeBackgroundSound,
-            enableTextOverlay: includeTextOverlay,
-            includeBackgroundSound,
-            includeTextOverlay
-          }
-        })
-      });
-      const data = await res.json();
+
+      const mediaFiles: any[] = [];
+      if (videoFile) {
+        const { mimeType, base64Data, data } = await ApiClient.fileToBase64(videoFile, videoFile.name, 'primary');
+        mediaFiles.push({
+          name: videoFile.name,
+          mimeType,
+          data,
+          base64Data,
+          role: 'primary',
+        });
+      }
+      if (referenceImage) {
+        const mimeMatch = referenceImage.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const base64Data = referenceImage.replace(/^data:[^;]+;base64,/, '');
+        mediaFiles.push({
+          name: 'reference_image',
+          mimeType,
+          data: base64Data,
+          base64Data,
+          role: 'reference',
+        });
+      }
+
+      const data = await ApiClient.generateAiWithMedia(
+        'ide_konten',
+        `Judul: ${promptQuery}\nCaption: ${videoTitleCaption}\nURL: ${tiktokUrl}\nManual Queries: ${manualQueries}`,
+        mediaFiles,
+        {
+          ideaCount,
+          ideasCount: ideaCount,
+          totalDuration,
+          splitDuration,
+          targetAeo,
+          enableAntiSlop: includeBackgroundSound,
+          enableTextOverlay: includeTextOverlay,
+          includeBackgroundSound,
+          includeTextOverlay,
+          modelEngine: GEMINI_MODELS.FLASH,
+        },
+        userApiKey || undefined
+      );
+
       let finalIdeas = ideasResult;
 
       if (data && data.success && Array.isArray(data.data) && data.data.length > 0) {
@@ -280,8 +303,40 @@ export const ContentIdeasView: React.FC = () => {
           </div>
         </div>
 
-        {/* 3. Dropdown Configuration Row */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
+        {/* 3. Configuration Row: Jumlah Ide, Durasi, Pecah Klip, Mode AEO */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
+          {/* Jumlah Ide Konten (1, 2, 3, 4, 5) */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-slate-700">
+                <Sparkles className="h-3.5 w-3.5 text-[#5b50e5]" />
+                <span>JUMLAH IDE (1 - 5)</span>
+              </label>
+              <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">
+                {ideaCount} Ide
+              </span>
+            </div>
+            
+            {/* Interactive 1-5 Pill Buttons */}
+            <div className="grid grid-cols-5 gap-1 p-1 bg-slate-100/80 rounded-xl border border-slate-200/70">
+              {[1, 2, 3, 4, 5].map((num) => (
+                <button
+                  key={num}
+                  type="button"
+                  onClick={() => setIdeaCount(num)}
+                  className={`py-1.5 text-xs font-black rounded-lg transition-all cursor-pointer ${
+                    ideaCount === num
+                      ? 'bg-[#5b50e5] text-white shadow-xs scale-100'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                  }`}
+                  title={`${num} Ide Konten`}
+                >
+                  {num}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Total Durasi Konten */}
           <div className="space-y-1.5">
             <label className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
@@ -291,7 +346,7 @@ export const ContentIdeasView: React.FC = () => {
             <select
               value={totalDuration}
               onChange={(e) => setTotalDuration(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none cursor-pointer shadow-xs"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none cursor-pointer shadow-xs"
             >
               <option value="60 Detik / 1 Menit (Rekomendasi Utama)">60 Detik / 1 Menit (Rekomendasi Utama)</option>
               <option value="30 Detik (Standard FYP)">30 Detik (Standard FYP)</option>
@@ -310,7 +365,7 @@ export const ContentIdeasView: React.FC = () => {
             <select
               value={splitDuration}
               onChange={(e) => setSplitDuration(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none cursor-pointer shadow-xs"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none cursor-pointer shadow-xs"
             >
               <option value="Tiap 5 Detik per Klip">Tiap 5 Detik per Klip</option>
               <option value="Tiap 10 Detik per Klip">Tiap 10 Detik per Klip</option>
@@ -328,7 +383,7 @@ export const ContentIdeasView: React.FC = () => {
             <select
               value={targetAeo}
               onChange={(e) => setTargetAeo(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none cursor-pointer shadow-xs"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none cursor-pointer shadow-xs"
             >
               <option value="Keduanya (Short & Long Tail)">Keduanya (Short & Long Tail)</option>
               <option value="Short Queries Saja (1-4 Kata)">Short Queries Saja (1-4 Kata)</option>
@@ -495,8 +550,8 @@ export const ContentIdeasView: React.FC = () => {
             <Sparkles className="h-4 w-4 text-[#5b50e5]" />
             <span>
               {loading
-                ? 'Pipeline 2-Tahap: Menganalisis Video & Grounding...'
-                : 'Hasilkan 5 Ide Konten, Prompt Adegan (60s) & Hashtag Relevan'}
+                ? `Pipeline 2-Tahap: Menganalisis & Meracik ${ideaCount} Ide Konten...`
+                : `Hasilkan ${ideaCount} Ide Konten, Prompt Adegan (${totalDuration.split('(')[0].trim()}) & Hashtag Relevan`}
             </span>
           </button>
         </div>
@@ -513,7 +568,7 @@ export const ContentIdeasView: React.FC = () => {
             <p className="text-xs text-slate-500">
               {activeStep === 1
                 ? 'Tahap 1: Ekstraksi objek, aksi & setting visual video...'
-                : 'Tahap 2: Meracik 5 Ide Konten Grounded & Dialog Natural Anti-Slop...'}
+                : `Tahap 2: Meracik ${ideaCount} Ide Konten Grounded & Dialog Natural Anti-Slop...`}
             </p>
           </div>
         </div>

@@ -1,119 +1,42 @@
 'use client';
 
 import React from 'react';
-import dynamic from 'next/dynamic';
 import { AppProvider, useApp } from '@/lib/app-context';
 import { Navbar, UserLayout } from '@/components/layout';
-import { TabSkeletonLoader } from '@/components/ui';
+import { ErrorBoundary } from '@/components/ui';
 
-// High-speed Dynamic Code Splitting for Featherlight & Collision-Free Multitask UI
-const LoginView = dynamic(
-  () => import('@/components/auth/LoginView').then((m) => m.LoginView),
-  {
-    loading: () => <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Memuat Portal Akses...</div>,
-    ssr: false,
-  }
-);
-
-const PricingCheckoutView = dynamic(
-  () => import('@/components/billing/PricingCheckoutView').then((m) => m.PricingCheckoutView),
-  {
-    loading: () => <TabSkeletonLoader title="Katalog Paket Akses" />,
-    ssr: false,
-  }
-);
-
-const AdminConsoleView = dynamic(
-  () => import('@/components/admin/AdminConsoleView').then((m) => m.AdminConsoleView),
-  {
-    loading: () => <TabSkeletonLoader title="Super Admin Matrix Console" />,
-    ssr: false,
-  }
-);
-
-const TikTokDownloaderView = dynamic(
-  () => import('@/components/user/tools/TikTokDownloaderView').then((m) => m.TikTokDownloaderView),
-  {
-    loading: () => <TabSkeletonLoader title="TikTok Downloader HD" />,
-    ssr: false,
-  }
-);
-
-const TikTokShopIdeasView = dynamic(
-  () => import('@/components/user/tools/TikTokShopIdeasView').then((m) => m.TikTokShopIdeasView),
-  {
-    loading: () => <TabSkeletonLoader title="Riset Produk & Ide Konten TikTok Shop" />,
-    ssr: false,
-  }
-);
-
-const ContentIdeasView = dynamic(
-  () => import('@/components/user/tools/ContentIdeasView').then((m) => m.ContentIdeasView),
-  {
-    loading: () => <TabSkeletonLoader title="Generator Ide Konten Viral" />,
-    ssr: false,
-  }
-);
-
-const VideoToPromptView = dynamic(
-  () => import('@/components/user/tools/VideoToPromptView').then((m) => m.VideoToPromptView),
-  {
-    loading: () => <TabSkeletonLoader title="Video to AI Video Prompt Splitter" />,
-    ssr: false,
-  }
-);
-
-const PhotoPromptView = dynamic(
-  () => import('@/components/user/tools/PhotoPromptView').then((m) => m.PhotoPromptView),
-  {
-    loading: () => <TabSkeletonLoader title="Prompt Foto Ultra-Realistis" />,
-    ssr: false,
-  }
-);
-
-const FrameExtractorView = dynamic(
-  () => import('@/components/user/tools/FrameExtractorView').then((m) => m.FrameExtractorView),
-  {
-    loading: () => <TabSkeletonLoader title="Ekstraktor Frame Video HD" />,
-    ssr: false,
-  }
-);
-
-const AutoFollbackView = dynamic(
-  () => import('@/components/user/tools/AutoFollbackView').then((m) => m.AutoFollbackView),
-  {
-    loading: () => <TabSkeletonLoader title="Auto Follback Medsos & Growth Engine" />,
-    ssr: false,
-  }
-);
-
-const HistoryView = dynamic(
-  () => import('@/components/user/history/HistoryView').then((m) => m.HistoryView),
-  {
-    loading: () => <TabSkeletonLoader title="Riwayat Hasil Generate" />,
-    ssr: false,
-  }
-);
-
-const ApiKeySettingsView = dynamic(
-  () => import('@/components/user/settings/ApiKeySettingsView').then((m) => m.ApiKeySettingsView),
-  {
-    loading: () => <TabSkeletonLoader title="Pengaturan API Key & Akun" />,
-    ssr: false,
-  }
-);
+// Direct robust component imports to eliminate dynamic chunk loading failures
+import { LoginView } from '@/components/auth/LoginView';
+import { PricingCheckoutView } from '@/components/billing/PricingCheckoutView';
+import { AdminConsoleView } from '@/components/admin/AdminConsoleView';
+import { TikTokDownloaderView } from '@/components/user/tools/TikTokDownloaderView';
+import { TikTokShopIdeasView } from '@/components/user/tools/TikTokShopIdeasView';
+import { ContentIdeasView } from '@/components/user/tools/ContentIdeasView';
+import { VideoToPromptView } from '@/components/user/tools/VideoToPromptView';
+import { PhotoPromptView } from '@/components/user/tools/PhotoPromptView';
+import { FrameExtractorView } from '@/components/user/tools/FrameExtractorView';
+import { HistoryView } from '@/components/user/history/HistoryView';
+import { ApiKeySettingsView } from '@/components/user/settings/ApiKeySettingsView';
 
 const MainAppWorkspace: React.FC = () => {
   const { currentView, activeToolTab } = useApp();
 
   // 1. Auth View (Login / Access Code verification)
   if (currentView === 'login') {
-    return <LoginView />;
+    return (
+      <ErrorBoundary fallbackTitle="Kendala Memuat Halaman Login">
+        <LoginView />
+      </ErrorBoundary>
+    );
   }
 
   // 2. Billing & Pricing Checkout View
   if (currentView === 'pricing' || currentView === 'checkout') {
-    return <PricingCheckoutView />;
+    return (
+      <ErrorBoundary fallbackTitle="Kendala Memuat Halaman Pembayaran">
+        <PricingCheckoutView />
+      </ErrorBoundary>
+    );
   }
 
   // 3. Super Admin Matrix Console View
@@ -121,7 +44,9 @@ const MainAppWorkspace: React.FC = () => {
     return (
       <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 selection:bg-indigo-500 selection:text-white">
         <Navbar />
-        <AdminConsoleView />
+        <ErrorBoundary fallbackTitle="Kendala Memuat Super Admin Console">
+          <AdminConsoleView />
+        </ErrorBoundary>
       </div>
     );
   }
@@ -129,8 +54,6 @@ const MainAppWorkspace: React.FC = () => {
   // 4. User Tools Dispatcher
   const renderActiveTool = () => {
     switch (activeToolTab) {
-      case 'auto_follback':
-        return <AutoFollbackView />;
       case 'tiktok_downloader':
         return <TikTokDownloaderView />;
       case 'tiktok_shop':
@@ -145,21 +68,27 @@ const MainAppWorkspace: React.FC = () => {
         return <FrameExtractorView />;
       case 'riwayat':
         return <HistoryView />;
-      case 'paket_akses':
-        return <PricingCheckoutView />;
       case 'pengaturan':
       default:
         return <ApiKeySettingsView />;
     }
   };
 
-  return <UserLayout>{renderActiveTool()}</UserLayout>;
+  return (
+    <UserLayout>
+      <ErrorBoundary fallbackTitle={`Kendala Memuat Tab ${activeToolTab}`}>
+        {renderActiveTool()}
+      </ErrorBoundary>
+    </UserLayout>
+  );
 };
 
 export default function Page() {
   return (
-    <AppProvider>
-      <MainAppWorkspace />
-    </AppProvider>
+    <ErrorBoundary fallbackTitle="Kendala Inisialisasi Aplikasi">
+      <AppProvider>
+        <MainAppWorkspace />
+      </AppProvider>
+    </ErrorBoundary>
   );
 }

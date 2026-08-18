@@ -49,8 +49,41 @@ export const PricingCheckoutView: React.FC = () => {
   const [copiedCode, setCopiedCode] = useState(false);
   const [simulatedApproving, setSimulatedApproving] = useState(false);
 
-  // If no package selected, show package list view
-  const currentPlan = selectedPlanForCheckout || packages[1] || packages[0];
+  // Filter active packages
+  const activePublicPackages = packages.filter(
+    (p) => p.active !== false && p.targetCategory !== 'Khusus Member VIP'
+  );
+  const activeVipPackage = packages.find(
+    (p) => p.targetCategory === 'Khusus Member VIP' && p.active !== false
+  );
+  const allPackagesInactive =
+    packages.every((p) => p.active === false) ||
+    (activePublicPackages.length === 0 && !activeVipPackage);
+
+  // If no package selected, find first active plan
+  const currentPlan =
+    selectedPlanForCheckout ||
+    activePublicPackages[0] ||
+    activeVipPackage ||
+    packages[0];
+
+  const formatWhatsAppNumber = (phone?: string): string => {
+    let clean = (phone || '').replace(/\D/g, '');
+    if (clean.startsWith('0')) clean = '62' + clean.slice(1);
+    if (!clean.startsWith('62') && clean.length > 6) clean = '62' + clean;
+    return clean || '6281234567890';
+  };
+
+  const getWhatsAppRedirectUrl = (planName?: string) => {
+    const cleanPhone = formatWhatsAppNumber(settings.waAdminPhone);
+
+    const textMsg = planName
+      ? `Halo Admin Satset AI! Saya ingin mendaftar / membeli paket lisensi "${planName}". Mohon info ketersediaan dan cara pendaftarannya.`
+      : (settings.waDefaultTemplate ||
+        'Halo Admin Satset AI! Saya ingin membeli / mendaftar lisensi baru. Mohon info paket dan cara pendaftarannya. Terima kasih!');
+
+    return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(textMsg)}`;
+  };
 
   const handleSelectPlan = (plan: PackagePlan) => {
     setSelectedPlanForCheckout(plan);
@@ -64,10 +97,20 @@ export const PricingCheckoutView: React.FC = () => {
       return;
     }
 
+    // Verify package is still active or valid
+    if (currentPlan.active === false && activePublicPackages.length > 0) {
+      alert(`Paket "${currentPlan.name}" saat ini sedang dinonaktifkan oleh Admin. Silakan pilih paket aktif lainnya.`);
+      setSelectedPlanForCheckout(null);
+      setStep(1);
+      return;
+    }
+
+    const sanitizedWhatsApp = formatWhatsAppNumber(whatsapp);
+
     createTransaction({
-      customerName,
-      whatsapp,
-      email,
+      customerName: customerName.trim(),
+      whatsapp: sanitizedWhatsApp,
+      email: email.trim().toLowerCase(),
       plan: currentPlan
     });
 
@@ -162,7 +205,7 @@ export const PricingCheckoutView: React.FC = () => {
 
       {/* Main Container */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8 md:py-12">
-        {/* If no plan selected for checkout, or on step 0, show the Pricing Plan Cards */}
+        {/* If no plan selected for checkout, or on step 0, show the Pricing Plan Cards / WhatsApp Redirect */}
         {!selectedPlanForCheckout ? (
           <div className="space-y-10">
             <div className="text-center space-y-2 max-w-2xl mx-auto">
@@ -170,18 +213,90 @@ export const PricingCheckoutView: React.FC = () => {
                 PILIHAN PAKET LISENSI
               </span>
               <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-950">
-                Pilih Paket Sesuai Kebutuhan Anda
+                {allPackagesInactive
+                  ? 'Pendaftaran Lisensi Langsung via WhatsApp'
+                  : 'Pilih Paket Sesuai Kebutuhan Anda'}
               </h1>
               <p className="text-sm text-slate-500 font-medium">
-                Proses otomatis dengan QRIS (BCA, Mandiri, GoPay, OVO, ShopeePay, Dana). Dapatkan Kode Akses dalam hitungan detik.
+                {allPackagesInactive
+                  ? 'Seluruh aktivasi lisensi baru saat ini dilayani langsung oleh Admin / Customer Service via WhatsApp.'
+                  : 'Proses otomatis dengan QRIS (BCA, Mandiri, GoPay, OVO, ShopeePay, Dana). Dapatkan Kode Akses dalam hitungan detik.'}
               </p>
             </div>
 
-            {/* Plans Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
-              {packages
-                .filter((p) => p.targetCategory !== 'Khusus Member VIP')
-                .map((plan) => (
+            {/* When all public packages are deactivated: Show WhatsApp Redirection Hub */}
+            {activePublicPackages.length === 0 ? (
+              <div className="rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-50/90 via-white to-teal-50/70 p-7 sm:p-10 shadow-lg text-center max-w-3xl mx-auto space-y-6">
+                <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-emerald-600 text-white shadow-md mx-auto">
+                  <MessageCircle className="h-8 w-8" />
+                </div>
+
+                <div className="space-y-2 max-w-xl mx-auto">
+                  <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 border border-emerald-300 px-3 py-0.5 text-[11px] font-bold text-emerald-800">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>Layanan Konsultasi & Pembelian Manual CS Aktif</span>
+                  </div>
+                  <h3 className="text-xl sm:text-2xl font-black text-slate-900">
+                    Pendaftaran Otomatis Sedang Dialihkan ke WhatsApp Admin
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed font-medium">
+                    Untuk memberikan pengalaman dan penawaran paket terbaik, seluruh pembelian akun baru saat ini diproses secara personal oleh tim kami. Klik tombol di bawah untuk langsung terhubung ke WhatsApp Admin.
+                  </p>
+                </div>
+
+                {/* Benefits / Guarantees */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-left max-w-2xl mx-auto pt-2">
+                  <div className="bg-white/80 border border-emerald-100 rounded-2xl p-3.5 space-y-1 shadow-xs">
+                    <div className="text-xs font-black text-emerald-700 flex items-center gap-1">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>Aktivasi Cepat</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">Kode akses langsung diterbitkan dan dipandu hingga aktif.</p>
+                  </div>
+
+                  <div className="bg-white/80 border border-emerald-100 rounded-2xl p-3.5 space-y-1 shadow-xs">
+                    <div className="text-xs font-black text-emerald-700 flex items-center gap-1">
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                      <span>Paket Kustom</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">Bisa request durasi harian, mingguan, bulanan, atau agensi.</p>
+                  </div>
+
+                  <div className="bg-white/80 border border-emerald-100 rounded-2xl p-3.5 space-y-1 shadow-xs">
+                    <div className="text-xs font-black text-emerald-700 flex items-center gap-1">
+                      <Clock className="h-3.5 w-3.5" />
+                      <span>Respon Cepat</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">Admin siap membantu menjawab pertanyaan Anda.</p>
+                  </div>
+                </div>
+
+                {/* Primary Action Button */}
+                <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+                  <a
+                    href={getWhatsAppRedirectUrl()}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white px-7 py-3.5 text-sm font-black shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-0.5 cursor-pointer"
+                  >
+                    <MessageCircle className="h-5 w-5 fill-current" />
+                    <span>Hubungi Admin via WhatsApp ({settings.waAdminPhone || '6281234567890'})</span>
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+
+                  <button
+                    onClick={() => setCurrentView('login')}
+                    className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 rounded-2xl bg-white hover:bg-slate-100 border border-slate-200 px-5 py-3.5 text-xs font-bold text-slate-700 transition cursor-pointer"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                    <span>Kembali ke Halaman Login</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Plans Grid (When Active Public Packages Exist) */
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
+                {activePublicPackages.map((plan) => (
                   <div
                     key={plan.id}
                     className={`relative flex flex-col justify-between rounded-3xl p-6 sm:p-7 border transition-all ${
@@ -264,28 +379,25 @@ export const PricingCheckoutView: React.FC = () => {
                     </div>
                   </div>
                 ))}
-            </div>
+              </div>
+            )}
 
-            {/* Special VIP renewal package banner */}
-            {packages.find((p) => p.targetCategory === 'Khusus Member VIP') && (
+            {/* Special VIP renewal package banner (if active) */}
+            {activeVipPackage && (
               <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-6 flex flex-col md:flex-row items-center justify-between gap-4">
                 <div className="space-y-1">
                   <div className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-2.5 py-0.5 text-[10px] font-bold text-white">
                     KHUSUS MEMBER VIP
                   </div>
                   <h4 className="text-base font-extrabold text-slate-900">
-                    Perpanjang / Upgrade Lisensi Member VIP (Rp 99.000 / 30 Hari)
+                    {activeVipPackage.name} (Rp {activeVipPackage.price.toLocaleString('id-ID')} / {activeVipPackage.durationDays} Hari)
                   </h4>
                   <p className="text-xs text-slate-600">
-                    Penawaran khusus member terdaftar untuk perpanjangan atau upgrade akun tanpa jeda.
+                    {activeVipPackage.tagline || 'Penawaran khusus member terdaftar untuk perpanjangan atau upgrade akun tanpa jeda.'}
                   </p>
                 </div>
                 <button
-                  onClick={() =>
-                    handleSelectPlan(
-                      packages.find((p) => p.targetCategory === 'Khusus Member VIP')!
-                    )
-                  }
+                  onClick={() => handleSelectPlan(activeVipPackage)}
                   className="shrink-0 rounded-xl bg-indigo-600 hover:bg-indigo-700 px-5 py-2.5 text-xs font-bold text-white shadow-md transition cursor-pointer"
                 >
                   Pilih Perpanjang Member →
@@ -622,7 +734,7 @@ export const PricingCheckoutView: React.FC = () => {
                     {/* WhatsApp Admin Confirmation Button */}
                     <div className="pt-2 flex flex-col gap-2.5">
                       <a
-                        href={`https://wa.me/${settings.waAdminPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+                        href={`https://wa.me/${formatWhatsAppNumber(settings.waAdminPhone)}?text=${encodeURIComponent(
                           `Halo Admin, saya sudah transfer untuk transaksi ID: ${
                             activeTransaction?.id || 'TRX-957744-SAT'
                           } atas nama ${activeTransaction?.customerName || customerName}. Mohon verifikasi.`

@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/lib/app-context';
+import { ApiClient } from '@/services/client/api-client';
 import { TikTokVideoMetadata } from '@/types';
 import {
   Download,
@@ -17,7 +18,8 @@ import {
   CheckCircle2,
   ExternalLink,
   RefreshCw,
-  Play
+  Play,
+  AlertCircle
 } from 'lucide-react';
 
 export const TikTokDownloaderView: React.FC = () => {
@@ -25,6 +27,7 @@ export const TikTokDownloaderView: React.FC = () => {
 
   const [inputUrl, setInputUrl] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [videoData, setVideoData] = useState<TikTokVideoMetadata | null>(null);
   const [recentDownloads, setRecentDownloads] = useState<TikTokVideoMetadata[]>([]);
 
@@ -45,27 +48,68 @@ export const TikTokDownloaderView: React.FC = () => {
     if (!targetUrl.trim()) return;
 
     setLoading(true);
+    setErrorMessage(null);
     try {
-      const res = await fetch('/api/tiktok/info', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl })
-      });
-      const data = await res.json();
-      if (data.data) {
-        setVideoData(data.data);
-        setRecentDownloads((prev) => [data.data, ...prev.filter((d) => d.id !== data.data.id)]);
+      const data = await ApiClient.scrapeTikTok({ url: targetUrl });
+      if (data && data.success && data.data) {
+        const raw = data.data;
+        const directVideo = raw.videoUrl || raw.videoUrlHd || '';
+
+        if (!directVideo) {
+          setErrorMessage(
+            raw.partialMetadataOnly
+              ? 'Video ini hanya menyediakan metadata ringkas (tautan berkas video langsung tidak tersedia dari sumber publik). Pastikan video berstatus publik atau coba video lainnya.'
+              : 'Tautan berkas video tidak ditemukan. Pastikan video publik & valid.'
+          );
+          setVideoData(null);
+          return;
+        }
+
+        const normalized: TikTokVideoMetadata = {
+          id: raw.id || `tt_${Date.now()}`,
+          url: raw.url || targetUrl,
+          title: raw.title || raw.caption || 'Video TikTok',
+          caption: raw.caption || raw.title || 'Video TikTok Kreator',
+          authorName: raw.authorName || raw.authorNickname || raw.author || 'Kreator TikTok',
+          authorHandle: raw.authorHandle || (raw.author ? (raw.author.startsWith('@') ? raw.author : `@${raw.author}`) : '@tiktok.creator'),
+          avatarUrl: raw.avatarUrl || raw.authorAvatar || `https://picsum.photos/seed/${encodeURIComponent(raw.authorHandle || 'user')}/120/120`,
+          likes: raw.likes ? String(raw.likes) : (raw.stats?.likes ? Number(raw.stats.likes).toLocaleString('id-ID') : '0'),
+          comments: raw.comments ? String(raw.comments) : (raw.stats?.comments ? Number(raw.stats.comments).toLocaleString('id-ID') : '0'),
+          shares: raw.shares ? String(raw.shares) : (raw.stats?.shares ? Number(raw.stats.shares).toLocaleString('id-ID') : '0'),
+          bookmarks: raw.bookmarks ? String(raw.bookmarks) : (raw.stats?.downloads ? Number(raw.stats.downloads).toLocaleString('id-ID') : '0'),
+          videoDuration: raw.videoDuration || raw.duration || 30,
+          videoUrl: directVideo,
+          videoUrlHd: raw.videoUrlHd || directVideo,
+          videoUrlWatermarked: raw.videoUrlWatermarked || raw.wmplay,
+          partialMetadataOnly: raw.partialMetadataOnly,
+          coverUrl: raw.coverUrl || `https://picsum.photos/seed/thumb_${Date.now()}/720/1280`,
+          audioTitle: raw.audioTitle || (raw.authorName ? `Sound Original - ${raw.authorName}` : 'Sound Original'),
+          audioAuthor: raw.audioAuthor || raw.authorName || 'TikTok Sound',
+          audioUrl: raw.audioUrl || raw.musicUrl || directVideo
+        };
+
+        setVideoData(normalized);
+        setRecentDownloads((prev) => [normalized, ...prev.filter((d) => d.id !== normalized.id)]);
 
         addHistoryItem({
           toolType: 'tiktok_downloader',
-          title: `TikTok: ${data.data.authorHandle || data.data.authorName}`,
-          previewText: (data.data.caption || data.data.title || '').substring(0, 100),
-          fullData: data.data,
+          title: `TikTok: ${normalized.authorHandle || normalized.authorName}`,
+          previewText: (normalized.caption || normalized.title || '').substring(0, 100),
+          fullData: normalized,
           tags: ['TikTok', 'Downloader', 'HD']
         });
+      } else {
+        setErrorMessage(
+          data?.error || 'Gagal mengambil informasi video TikTok. Pastikan URL video publik & valid, atau coba lagi beberapa saat.'
+        );
+        setVideoData(null);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setErrorMessage(
+        err?.message || 'Terjadi kesalahan saat memproses URL TikTok. Silakan periksa URL atau coba kembali.'
+      );
+      setVideoData(null);
     } finally {
       setLoading(false);
     }
@@ -163,6 +207,14 @@ export const TikTokDownloaderView: React.FC = () => {
         </div>
       </div>
 
+      {/* Error Message Notification */}
+      {errorMessage && (
+        <div className="flex items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-xs sm:text-sm text-rose-700 font-medium animate-in fade-in">
+          <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />
+          <div className="flex-1">{errorMessage}</div>
+        </div>
+      )}
+
       {/* Clean Empty State when no video searched */}
       {!videoData && !loading && (
         <div className="rounded-3xl border border-dashed border-slate-200 bg-white/60 p-8 sm:p-12 text-center space-y-4 max-w-xl mx-auto">
@@ -190,6 +242,14 @@ export const TikTokDownloaderView: React.FC = () => {
                 controls
                 className="w-full h-full object-cover"
                 playsInline
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  const proxyUrl = `/api/tiktok/proxy?url=${encodeURIComponent(videoData.videoUrl)}`;
+                  if (!target.src.includes('/api/tiktok/proxy')) {
+                    target.src = proxyUrl;
+                    target.load();
+                  }
+                }}
               />
             </div>
 
@@ -199,19 +259,23 @@ export const TikTokDownloaderView: React.FC = () => {
               <div className="flex items-center justify-between border-b border-slate-100 pb-4">
                 <div className="flex items-center gap-3">
                   <img
-                    src={videoData.avatarUrl}
-                    alt={videoData.authorName}
-                    className="h-11 w-11 rounded-full object-cover border border-slate-200 shadow-xs"
+                    src={videoData.avatarUrl || `https://picsum.photos/seed/${encodeURIComponent(videoData.authorHandle || 'user')}/120/120`}
+                    alt={videoData.authorName || 'Avatar Kreator'}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${encodeURIComponent(videoData.authorHandle || 'user')}/120/120`;
+                    }}
+                    className="h-11 w-11 rounded-full object-cover border border-slate-200 shadow-xs bg-slate-100"
                   />
                   <div>
                     <div className="text-sm font-black text-slate-900 flex items-center gap-1.5">
-                      <span>{videoData.authorName}</span>
-                      <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.2 rounded-full">
+                      <span>{videoData.authorName || 'Kreator TikTok'}</span>
+                      <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.2 rounded-full font-bold">
                         Kreator
                       </span>
                     </div>
                     <div className="text-xs text-slate-500 font-mono">
-                      {videoData.authorHandle}
+                      {videoData.authorHandle || '@kreator.tiktok'}
                     </div>
                   </div>
                 </div>
@@ -287,14 +351,14 @@ export const TikTokDownloaderView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Direct Download Options */}
+              {/* Direct Download Options via Proxy */}
               <div className="space-y-2 pt-2 border-t border-slate-100">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                   PILIHAN UNDUHAN BERKAS
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <a
-                    href={videoData.videoUrl}
+                    href={`/api/tiktok/proxy?url=${encodeURIComponent(videoData.videoUrl)}&filename=tiktok_satset_hd.mp4&download=true`}
                     download="tiktok_satset_hd.mp4"
                     target="_blank"
                     rel="noreferrer"
@@ -305,14 +369,16 @@ export const TikTokDownloaderView: React.FC = () => {
                   </a>
 
                   <a
-                    href={videoData.audioUrl}
+                    href={`/api/tiktok/proxy?url=${encodeURIComponent(videoData.audioUrl)}&filename=audio_tiktok_satset.mp3&download=true`}
                     download="audio_tiktok_satset.mp3"
                     target="_blank"
                     rel="noreferrer"
                     className="flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-slate-50 hover:bg-slate-100 py-2.5 px-3 text-xs font-bold text-slate-700 transition"
                   >
                     <Music className="h-3.5 w-3.5 text-indigo-600" />
-                    <span>Unduh Audio MP3 ({videoData.audioTitle})</span>
+                    <span className="truncate max-w-[200px]">
+                      Unduh Audio MP3 {videoData.audioTitle ? `(${videoData.audioTitle})` : ''}
+                    </span>
                   </a>
                 </div>
               </div>

@@ -1,25 +1,35 @@
-import type {Metadata} from 'next';
-import './globals.css'; // Global styles
+import type { Metadata, Viewport } from 'next';
+import './globals.css';
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: '#4f46e5',
+};
 
 export const metadata: Metadata = {
-  title: 'My Google AI Studio App',
-  description: 'An application built with Google AI Studio.',
+  title: 'Tools Satset AI - Multi-Engine Content Suite',
+  description: 'Platform AI All-in-One untuk Kreator: TikTok Shop Affiliate, Ide Konten AEO Viral, Video to Prompt AI, Ekstraktor Frame HD, dan Prompt Foto Nano Samama.',
   openGraph: {
-    title: 'My Google AI Studio App',
-    description: 'An application built with Google AI Studio.',
+    title: 'Tools Satset AI - Multi-Engine Content Suite',
+    description: 'Platform AI All-in-One untuk Kreator TikTok & Media Sosial.',
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'My Google AI Studio App',
-    description: 'An application built with Google AI Studio.',
+    title: 'Tools Satset AI - Multi-Engine Content Suite',
+    description: 'Platform AI All-in-One untuk Kreator TikTok & Media Sosial.',
   },
 };
 
-export default function RootLayout({children}: {children: React.ReactNode}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body suppressHydrationWarning>{children}</body>
+    <html lang="id" className="scroll-smooth antialiased">
+      <body suppressHydrationWarning className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+        {children}
+      </body>
     </html>
   );
 }

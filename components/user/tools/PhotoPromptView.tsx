@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '@/lib/app-context';
+import { ApiClient } from '@/services/client/api-client';
+import { GEMINI_MODELS } from '@/server/config/model-tiers.config';
 import {
   Camera,
   Sparkles,
@@ -61,22 +63,30 @@ export const PhotoPromptView: React.FC = () => {
           ? 'Analisis visual foto referensi produk/objek'
           : 'Foto Komersial Estetik Profesional E-Commerce';
 
-      const res = await fetch('/api/gemini/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskType: 'prompt_foto',
-          prompt: promptQuery,
-          customApiKey: userApiKey || undefined,
-          extraData: {
-            presetStyle: visualPreset,
-            aspectRatio: aspectRatio,
-            negativePrompt: negativePromptInput,
-            mode: activeMode
-          }
-        })
+      const mediaFiles =
+        activeMode === 'image_to_prompt' && uploadedImage
+          ? [
+              {
+                mimeType: uploadedImage.split(';')[0].replace('data:', '') || 'image/jpeg',
+                data: uploadedImage,
+              },
+            ]
+          : [];
+
+      const data = await ApiClient.generateAi({
+        taskType: 'prompt_foto',
+        prompt: promptQuery,
+        mediaFiles,
+        customApiKey: userApiKey || undefined,
+        extraData: {
+          presetStyle: visualPreset,
+          aspectRatio: aspectRatio,
+          negativePrompt: negativePromptInput,
+          mode: activeMode,
+          modelEngine: GEMINI_MODELS.FLASH,
+        },
       });
-      const data = await res.json();
+
       let finalResult = null;
 
       if (data && data.success && data.data && data.data.masterPrompt) {

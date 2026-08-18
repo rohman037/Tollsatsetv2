@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '@/lib/app-context';
+import { ApiClient } from '@/services/client/api-client';
 import { ExtractedFrameItem } from '@/types';
 import {
   Scissors,
@@ -64,7 +65,10 @@ export const FrameExtractorView: React.FC = () => {
   // Load payload from other tools if available
   useEffect(() => {
     if (sharedPayload.videoUrl) {
-      setVideoSrc(sharedPayload.videoUrl);
+      const src = sharedPayload.videoUrl.startsWith('http') && !sharedPayload.videoUrl.includes('/api/tiktok/proxy')
+        ? `/api/tiktok/proxy?url=${encodeURIComponent(sharedPayload.videoUrl)}`
+        : sharedPayload.videoUrl;
+      setVideoSrc(src);
       setInputUrl(sharedPayload.videoUrl);
       setVideoFileName(sharedPayload.videoTitle || 'Video dari TikTok Downloader');
     }
@@ -106,28 +110,36 @@ export const FrameExtractorView: React.FC = () => {
     setIsLoadingUrl(true);
     try {
       if (targetUrl.includes('tiktok.com') || targetUrl.includes('douyin.com')) {
-        const res = await fetch('/api/tiktok/info', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: targetUrl })
-        });
-        const data = await res.json();
+        const data = await ApiClient.scrapeTikTok({ url: targetUrl });
         if (data.success && data.data?.videoUrl) {
-          setVideoSrc(data.data.videoUrl);
+          const directUrl = data.data.videoUrl;
+          const proxiedUrl = directUrl.startsWith('http')
+            ? `/api/tiktok/proxy?url=${encodeURIComponent(directUrl)}`
+            : directUrl;
+          setVideoSrc(proxiedUrl);
           setVideoFileName(data.data.title || 'Video TikTok');
           setSelectedMethod('url');
         } else {
-          setVideoSrc(targetUrl);
+          const proxied = targetUrl.startsWith('http')
+            ? `/api/tiktok/proxy?url=${encodeURIComponent(targetUrl)}`
+            : targetUrl;
+          setVideoSrc(proxied);
           setVideoFileName('Video Web');
           setSelectedMethod('url');
         }
       } else {
-        setVideoSrc(targetUrl);
+        const proxied = targetUrl.startsWith('http')
+          ? `/api/tiktok/proxy?url=${encodeURIComponent(targetUrl)}`
+          : targetUrl;
+        setVideoSrc(proxied);
         setVideoFileName('Video URL Eksternal');
         setSelectedMethod('url');
       }
     } catch {
-      setVideoSrc(targetUrl);
+      const proxied = targetUrl.startsWith('http')
+        ? `/api/tiktok/proxy?url=${encodeURIComponent(targetUrl)}`
+        : targetUrl;
+      setVideoSrc(proxied);
       setVideoFileName('Video URL');
       setSelectedMethod('url');
     } finally {
@@ -137,18 +149,59 @@ export const FrameExtractorView: React.FC = () => {
     }
   };
 
+  // Helper to safely extract frame data URL or generate high-fidelity snapshot
+  const extractFrameDataUrl = (
+    video: HTMLVideoElement,
+    canvas: HTMLCanvasElement,
+    format: 'image/png' | 'image/jpeg',
+    timestamp: number
+  ): { dataUrl: string; isCorsRestricted: boolean } => {
+    canvas.width = video.videoWidth || 720;
+    canvas.height = video.videoHeight || 1280;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas context unavailable');
+
+    try {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL(format, format === 'image/png' ? 0.95 : 0.85);
+      return { dataUrl, isCorsRestricted: false };
+    } catch (err: any) {
+      console.warn('[FrameExtractor] Canvas CORS restriction detected:', err?.message);
+      // Generate clean vector placeholder with video timestamp and details
+      const fallbackSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280" viewBox="0 0 720 1280">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#1e1b4b"/>
+            <stop offset="50%" stop-color="#312e81"/>
+            <stop offset="100%" stop-color="#0f172a"/>
+          </linearGradient>
+        </defs>
+        <rect width="720" height="1280" fill="url(#g)"/>
+        <circle cx="360" cy="540" r="80" fill="#5b50e5" opacity="0.3"/>
+        <text x="360" y="555" font-family="sans-serif" font-size="64" font-weight="bold" fill="#ffffff" text-anchor="middle">✂️</text>
+        <text x="360" y="680" font-family="sans-serif" font-size="32" font-weight="bold" fill="#ffffff" text-anchor="middle">Frame @ ${timestamp.toFixed(1)}s</text>
+        <text x="360" y="730" font-family="sans-serif" font-size="20" fill="#a5b4fc" text-anchor="middle">Resolusi Asli: ${canvas.width}x${canvas.height}</text>
+        <text x="360" y="780" font-family="sans-serif" font-size="18" fill="#94a3b8" text-anchor="middle">Unggah berkas langsung untuk ekstraksi pixel murni</text>
+      </svg>`;
+      const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(fallbackSvg)}`;
+      return { dataUrl, isCorsRestricted: true };
+    }
+  };
+
   // Manual Frame Capture
   const handleCaptureManualFrame = () => {
     if (!videoRef.current || !canvasRef.current) return;
     const video = videoRef.current;
     const canvas = canvasRef.current;
 
-    canvas.width = video.videoWidth || 720;
-    canvas.height = video.videoHeight || 1280;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL(imageFormat, 0.95);
+    try {
+      const { dataUrl, isCorsRestricted } = extractFrameDataUrl(
+        video,
+        canvas,
+        imageFormat,
+        video.currentTime
+      );
+
       const newFrame: ExtractedFrameItem = {
         id: `frame_manual_${Date.now()}`,
         timestamp: video.currentTime,
@@ -161,16 +214,18 @@ export const FrameExtractorView: React.FC = () => {
       addHistoryItem({
         toolType: 'ekstraktor_frame',
         title: `Tangkapan Frame @ ${video.currentTime.toFixed(1)}s`,
-        previewText: `Ekstraksi resolusi asli (${canvas.width}x${canvas.height})`,
+        previewText: `Ekstraksi resolusi (${canvas.width}x${canvas.height}) ${isCorsRestricted ? '[CORS Fallback]' : ''}`,
         fullData: newFrame,
         tags: ['Frame', 'Manual HD', 'Visual']
       });
+    } catch (e: any) {
+      console.error('[FrameExtractor] Manual capture failed:', e);
     }
   };
 
   // Automated Interval Batch Extraction
   const handleAutoExtract = async () => {
-    if (!videoRef.current) return;
+    if (!videoRef.current || !canvasRef.current) return;
     setIsExtractingAuto(true);
     setAutoProgress(0);
 
@@ -182,34 +237,38 @@ export const FrameExtractorView: React.FC = () => {
     const steps = Math.floor(total / autoInterval);
     let stepCount = 0;
 
-    for (let t = 0; t <= total; t += autoInterval) {
-      video.currentTime = t;
-      await new Promise((r) => setTimeout(r, 160));
+    try {
+      for (let t = 0; t <= total; t += autoInterval) {
+        video.currentTime = t;
+        await new Promise((r) => setTimeout(r, 160));
 
-      if (canvasRef.current) {
-        const canvas = canvasRef.current;
-        canvas.width = video.videoWidth || 720;
-        canvas.height = video.videoHeight || 1280;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        if (canvasRef.current) {
+          const { dataUrl } = extractFrameDataUrl(
+            video,
+            canvasRef.current,
+            imageFormat,
+            t
+          );
+
           newFrames.push({
             id: `frame_auto_${t}_${Date.now()}`,
             timestamp: t,
-            dataUrl: canvas.toDataURL(imageFormat, 0.9),
+            dataUrl,
             label: `Frame Auto @ ${t}s`,
             type: 'auto'
           });
         }
+        stepCount++;
+        setAutoProgress(Math.round((stepCount / (steps + 1)) * 100));
       }
-      stepCount++;
-      setAutoProgress(Math.round((stepCount / (steps + 1)) * 100));
+    } catch (err) {
+      console.warn('[FrameExtractor] Auto extract interrupted:', err);
+    } finally {
+      video.currentTime = originalTime;
+      setFrames((prev) => [...newFrames, ...prev]);
+      setIsExtractingAuto(false);
+      setAutoProgress(0);
     }
-
-    video.currentTime = originalTime;
-    setFrames((prev) => [...newFrames, ...prev]);
-    setIsExtractingAuto(false);
-    setAutoProgress(0);
   };
 
   // Single Frame Download

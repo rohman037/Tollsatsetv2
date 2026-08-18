@@ -3,6 +3,8 @@
  * Clean contract between Frontend (Client) and Backend (Next.js API & Services)
  */
 
+import { SupportedModelEngine } from '../config/model-tiers.config';
+
 export type AiTaskType =
   | 'tiktok_shop'
   | 'ide_konten'
@@ -10,11 +12,21 @@ export type AiTaskType =
   | 'prompt_foto'
   | 'general';
 
+export interface MediaFilePayload {
+  name?: string;
+  mimeType: string;
+  data?: string; // base64 string or data URL
+  base64Data?: string; // raw base64 string
+  role?: 'primary' | 'reference' | 'context' | string;
+}
+
 export interface GenerateAiRequest {
   taskType: AiTaskType;
   prompt: string;
+  mediaFiles?: MediaFilePayload[];
   extraData?: {
-    modelEngine?: 'gemini-3.5-flash' | 'gemini-3.5-pro' | 'gemini-2.5-flash' | string;
+    modelEngine?: SupportedModelEngine;
+    mediaFiles?: MediaFilePayload[];
     totalDuration?: string;
     splitDuration?: string;
     toneStyle?: string;
@@ -26,6 +38,21 @@ export interface GenerateAiRequest {
     lensType?: string;
     negativePrompt?: string;
     customKnowledge?: string;
+    productUrl?: string;
+    productDetail?: string;
+    numIdeas?: number;
+    ideaCount?: number;
+    ideasCount?: number;
+    productEnrichment?: any;
+    groundingContext?: string;
+    identityAnchorDescription?: string;
+    hasVisualMedia?: boolean;
+    analysisMode?: 'deep' | 'fast' | 'standard';
+    includeBackgroundSound?: boolean;
+    includeTextOverlay?: boolean;
+    presetStyle?: string;
+    targetAeo?: string;
+    apiKeysPool?: string[];
     [key: string]: any;
   };
   customApiKey?: string;
@@ -59,15 +86,34 @@ export interface TikTokScrapeRequest {
 export interface TikTokScrapeResponse {
   success: boolean;
   data?: {
+    id?: string;
+    url?: string;
     title: string;
+    caption?: string;
     author: string;
+    authorName?: string;
     authorNickname: string;
+    authorHandle?: string;
+    avatarUrl?: string;
     authorAvatar: string;
     duration: number;
+    videoDuration?: number;
     videoUrl: string;
     videoUrlHd?: string;
+    videoUrlWatermarked?: string;
+    partialMetadataOnly?: boolean;
+    play?: string;
+    wmplay?: string;
+    hdplay?: string;
     musicUrl?: string;
+    audioUrl?: string;
+    audioTitle?: string;
+    audioAuthor?: string;
     coverUrl: string;
+    likes?: string;
+    comments?: string;
+    shares?: string;
+    bookmarks?: string;
     stats: {
       plays: number;
       likes: number;

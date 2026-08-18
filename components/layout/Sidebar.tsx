@@ -14,8 +14,7 @@ import {
   Settings,
   Shield,
   ShieldAlert,
-  ArrowUpRight,
-  UserPlus
+  ArrowUpRight
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -33,8 +32,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, setMobileOpen }) =
 
   const getIconForTab = (id: string) => {
     switch (id) {
-      case 'auto_follback':
-        return <UserPlus className="h-4 w-4" />;
       case 'tiktok_downloader':
         return <Download className="h-4 w-4" />;
       case 'tiktok_shop':
@@ -49,8 +46,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, setMobileOpen }) =
         return <Scissors className="h-4 w-4" />;
       case 'riwayat':
         return <History className="h-4 w-4" />;
-      case 'paket_akses':
-        return <CreditCard className="h-4 w-4" />;
       case 'pengaturan':
       case 'pengaturan_sys':
         return <Settings className="h-4 w-4" />;
@@ -63,11 +58,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, setMobileOpen }) =
     {
       id: 'riwayat',
       label: 'Riwayat Lokal'
-    },
-    {
-      id: 'auto_follback',
-      label: 'Auto Follback Medsos',
-      badge: 'AUTO'
     },
     {
       id: 'tiktok_downloader',
@@ -96,10 +86,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, setMobileOpen }) =
   ];
 
   const accountItems: { id: ToolTab; label: string }[] = [
-    {
-      id: 'paket_akses',
-      label: 'Paket & Akses'
-    },
     {
       id: 'pengaturan',
       label: 'API Key & Pengaturan'

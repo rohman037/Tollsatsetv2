@@ -211,15 +211,12 @@ export const DEFAULT_SETTINGS: AdminSettingsState = {
   userAnnouncementBgColor: '#1e1b4b',
   userAnnouncementTextColor: '#facc15',
   userSidebarTools: [
-    { id: 'pengaturan_sys', title: 'Pengaturan System', customLabel: 'Pengaturan System', badgeLabel: 'WAJIB', badgeColor: '#3b82f6', enabled: true },
-    { id: 'auto_follback', title: 'Auto Follback Medsos', customLabel: 'Auto Follback Medsos', badgeLabel: 'AUTO', badgeColor: '#8b5cf6', enabled: true },
     { id: 'tiktok_downloader', title: 'TikTok Downloader', customLabel: 'TikTok Downloader', badgeLabel: 'FREE', badgeColor: '#10b981', enabled: true },
     { id: 'video_to_prompt', title: 'Video-to-Prompt AI', customLabel: 'Video-to-Prompt AI', badgeLabel: 'HOT', badgeColor: '#f97316', enabled: true },
     { id: 'prompt_foto', title: 'Prompt Foto Nano', customLabel: 'Prompt Foto Nano', badgeLabel: 'ULTRA', badgeColor: '#8b5cf6', enabled: true },
     { id: 'ide_konten', title: 'Ide Konten AI (AEO)', customLabel: 'Ide Konten AI (AEO)', badgeLabel: 'FYP', badgeColor: '#06b6d4', enabled: true },
     { id: 'tiktok_shop', title: 'TikTok Shop to Ideas', customLabel: 'TikTok Shop to Ideas', badgeLabel: 'PRO', badgeColor: '#ec4899', enabled: true },
-    { id: 'ekstraktor_frame', title: 'Video Frame Extractor', customLabel: 'Video Frame Extractor', badgeLabel: '8K', badgeColor: '#6366f1', enabled: true },
-    { id: 'paket_akses', title: 'Paket Akses & Lisensi', customLabel: 'Paket Akses & Lisensi', badgeLabel: 'FREE / FREE 4', badgeColor: '#14b8a6', enabled: true }
+    { id: 'ekstraktor_frame', title: 'Video Frame Extractor', customLabel: 'Video Frame Extractor', badgeLabel: '8K', badgeColor: '#6366f1', enabled: true }
   ],
   userWelcomeTitle: 'Selamat Datang di Workspace Tools Satset AI',
   userWelcomeDesc: 'Kelola & ciptakan konten viral dari video, prompt foto nano, ide konten FYP hingga ekstraksi frame dalam satu sistem otomatis.',
@@ -487,3 +484,69 @@ export const DEFAULT_LOGIN_LOGS: LoginAuditLog[] = [
     detail: 'Mengunggah bukti pembayaran TRX-957744-SAT'
   }
 ];
+
+/**
+ * Generates a scoped localStorage key for a specific user to prevent data collisions
+ */
+export function getScopedStorageKey(baseKey: string, userIdentifier?: string | null): string {
+  if (!userIdentifier || typeof userIdentifier !== 'string') {
+    return baseKey;
+  }
+  const cleanId = userIdentifier.trim().replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+  return `${baseKey}_${cleanId}`;
+}
+
+/**
+ * Automatically migrates legacy global key data to scoped user key if scoped data does not exist
+ */
+export function migrateLegacyToScopedStorage(baseKey: string, userIdentifier?: string | null): void {
+  if (typeof window === 'undefined' || !userIdentifier) return;
+  try {
+    const scopedKey = getScopedStorageKey(baseKey, userIdentifier);
+    if (scopedKey === baseKey) return;
+
+    const existingScoped = localStorage.getItem(scopedKey);
+    if (!existingScoped) {
+      const legacyGlobal = localStorage.getItem(baseKey);
+      if (legacyGlobal) {
+        localStorage.setItem(scopedKey, legacyGlobal);
+      }
+    }
+  } catch (e) {
+    console.warn('[Storage] Migration notice:', e);
+  }
+}
+
+/**
+ * Safe localStorage setter with QuotaExceededError catch & auto-pruning
+ */
+export function safeSetStorage(key: string, value: string): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (err: any) {
+    console.warn(`[Storage] Quota issue on key ${key}:`, err?.message);
+    try {
+      // Auto-prune large history or events if quota exceeded
+      const hist = localStorage.getItem('ts_history_v1');
+      if (hist) {
+        try {
+          const parsed = JSON.parse(hist);
+          if (Array.isArray(parsed) && parsed.length > 15) {
+            localStorage.setItem('ts_history_v1', JSON.stringify(parsed.slice(0, 15)));
+          }
+        } catch {}
+      }
+      localStorage.removeItem('ts_live_events_v1');
+      localStorage.removeItem('ts_login_logs_v1');
+      // Retry set
+      localStorage.setItem(key, value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+

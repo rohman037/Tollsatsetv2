@@ -2,6 +2,8 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/lib/app-context';
+import { ApiClient } from '@/services/client/api-client';
+import { GEMINI_MODELS } from '@/server/config/model-tiers.config';
 import {
   Sparkles,
   Search,
@@ -48,26 +50,27 @@ export const TikTokShopIdeasView: React.FC = () => {
   const handleGenerate = async () => {
     setLoading(true);
     try {
-      const promptQuery = productDetail.trim() || productUrl.trim() || 'Produk TikTok Shop Viral';
-      const res = await fetch('/api/gemini/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskType: 'tiktok_shop',
-          prompt: `Produk: ${promptQuery}\nURL: ${productUrl}`,
-          customApiKey: userApiKey || undefined,
-          extraData: {
-            totalDuration,
-            splitDuration,
-            targetAeo,
-            analysisMode,
-            numIdeas,
-            includeBackgroundSound,
-            includeTextOverlay
-          }
-        })
+      const trimmedUrl = productUrl.trim();
+      const trimmedDetail = productDetail.trim();
+      const promptQuery = trimmedDetail || (trimmedUrl ? `Produk dari URL: ${trimmedUrl}` : 'Produk TikTok Shop Viral');
+
+      const data = await ApiClient.generateAi({
+        taskType: 'tiktok_shop',
+        prompt: promptQuery,
+        customApiKey: userApiKey || undefined,
+        extraData: {
+          productUrl: trimmedUrl || undefined,
+          productDetail: trimmedDetail || undefined,
+          totalDuration,
+          splitDuration,
+          targetAeo,
+          analysisMode,
+          numIdeas,
+          includeBackgroundSound,
+          includeTextOverlay,
+          modelEngine: GEMINI_MODELS.FLASH,
+        }
       });
-      const data = await res.json();
       const finalData = data && data.success && data.data ? data.data : result;
 
       if (data && data.success && data.data) {

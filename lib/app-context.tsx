@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import {
   AdminSettingsState,
   GenerationHistoryItem,
@@ -23,7 +23,10 @@ import {
   DEFAULT_SAFE_LEARNING,
   DEFAULT_SETTINGS,
   DEFAULT_TRANSACTIONS,
-  DEFAULT_USERS
+  DEFAULT_USERS,
+  getScopedStorageKey,
+  migrateLegacyToScopedStorage,
+  safeSetStorage
 } from '@/lib/storage';
 
 export type MainView = 'login' | 'pricing' | 'checkout' | 'dashboard' | 'admin';
@@ -35,9 +38,7 @@ export type ToolTab =
   | 'video_to_prompt'
   | 'prompt_foto'
   | 'ekstraktor_frame'
-  | 'auto_follback'
   | 'riwayat'
-  | 'paket_akses'
   | 'pengaturan';
 
 export type AdminTab =
@@ -97,7 +98,12 @@ interface AppContextType {
 
   // Custom API Key for Gemini
   userApiKey: string;
+  userApiKeys: string[];
   setUserApiKey: (key: string) => void;
+  setUserApiKeys: (keys: string[]) => void;
+  addUserApiKeys: (input: string | string[]) => { added: number; duplicates: number; invalid: number };
+  removeUserApiKey: (keyToRemove: string) => void;
+  clearUserApiKeys: () => void;
 
   // Data Collections & Operations
   users: UserSession[];
@@ -172,7 +178,29 @@ const STORAGE_KEYS = {
   LIVE_EVENTS: 'ts_live_events_v1',
   LOGIN_LOGS: 'ts_login_logs_v1',
   CURRENT_SESSION: 'ts_current_session_v1',
-  USER_API_KEY: 'ts_user_api_key_v1'
+  USER_API_KEY: 'ts_user_api_key_v1',
+  USER_API_KEYS: 'ts_user_api_keys_v2'
+};
+
+const sanitizeSingleApiKey = (key: string): string | null => {
+  if (!key || typeof key !== 'string') return null;
+  const cleaned = key
+    .replace(/[\uFEFF\u200B\u200C\u200D\u2060]/g, '')
+    .trim()
+    .replace(/^["'`]|["'`]$/g, '')
+    .replace(/[\r\n\t\f\v\0]/g, '')
+    .trim();
+  if (
+    cleaned.length < 15 ||
+    cleaned.startsWith('AQ.') ||
+    cleaned.startsWith('ya29.') ||
+    cleaned.startsWith('Bearer ') ||
+    cleaned.includes(' ')
+  ) {
+    return null;
+  }
+  const strict = cleaned.replace(/[^A-Za-z0-9_\-\.]/g, '');
+  return strict.length >= 15 ? strict : null;
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -183,14 +211,98 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [selectedPlanForCheckout, setSelectedPlanForCheckout] = useState<PackagePlan | null>(null);
   const [activeTransaction, setActiveTransaction] = useState<Transaction | null>(null);
   const [sharedPayload, setSharedPayload] = useState<SharedToolPayload>({});
-  const [userApiKey, setUserApiKeyState] = useState<string>('');
+  const [userApiKeys, setUserApiKeysState] = useState<string[]>([]);
+  const userApiKey = userApiKeys.join('\n');
 
-  const setUserApiKey = (key: string) => {
-    setUserApiKeyState(key);
-    try {
-      localStorage.setItem(STORAGE_KEYS.USER_API_KEY, key);
-    } catch {}
-  };
+  const persistUserApiKeys = useCallback((keys: string[], userCode?: string) => {
+    const json = JSON.stringify(keys);
+    const textJoined = keys.join('\n');
+    const targetCode = userCode || currentUser?.accessCode;
+
+    const scopedKeys = getScopedStorageKey(STORAGE_KEYS.USER_API_KEYS, targetCode);
+    const scopedKey = getScopedStorageKey(STORAGE_KEYS.USER_API_KEY, targetCode);
+
+    safeSetStorage(scopedKeys, json);
+    safeSetStorage(scopedKey, textJoined);
+
+    safeSetStorage(STORAGE_KEYS.USER_API_KEYS, json);
+    safeSetStorage(STORAGE_KEYS.USER_API_KEY, textJoined);
+  }, [currentUser?.accessCode]);
+
+  const setUserApiKeys = useCallback((keys: string[]) => {
+    const cleanList: string[] = [];
+    for (const k of keys) {
+      const sanitized = sanitizeSingleApiKey(k);
+      if (sanitized && !cleanList.includes(sanitized)) {
+        cleanList.push(sanitized);
+      }
+    }
+    setUserApiKeysState(cleanList);
+    persistUserApiKeys(cleanList);
+  }, [persistUserApiKeys]);
+
+  const setUserApiKey = useCallback((rawString: string) => {
+    if (!rawString || !rawString.trim()) {
+      setUserApiKeysState([]);
+      persistUserApiKeys([]);
+      return;
+    }
+    const lines = rawString.split(/[\r\n,;]+/);
+    const cleanList: string[] = [];
+    for (const l of lines) {
+      const s = sanitizeSingleApiKey(l);
+      if (s && !cleanList.includes(s)) {
+        cleanList.push(s);
+      }
+    }
+    setUserApiKeysState(cleanList);
+    persistUserApiKeys(cleanList);
+  }, [persistUserApiKeys]);
+
+  const addUserApiKeys = useCallback((input: string | string[]) => {
+    const tokens = Array.isArray(input)
+      ? input
+      : (typeof input === 'string' ? input.split(/[\r\n,;]+/) : []);
+
+    let added = 0;
+    let duplicates = 0;
+    let invalid = 0;
+
+    const nextKeys = [...userApiKeys];
+
+    for (const raw of tokens) {
+      const sanitized = sanitizeSingleApiKey(raw);
+      if (!sanitized) {
+        if (raw && raw.trim().length > 0) invalid++;
+        continue;
+      }
+      if (nextKeys.includes(sanitized)) {
+        duplicates++;
+      } else {
+        nextKeys.push(sanitized);
+        added++;
+      }
+    }
+
+    if (added > 0) {
+      setUserApiKeysState(nextKeys);
+      persistUserApiKeys(nextKeys);
+    }
+
+    return { added, duplicates, invalid };
+  }, [userApiKeys, persistUserApiKeys]);
+
+  const removeUserApiKey = useCallback((keyToRemove: string) => {
+    const cleanTarget = keyToRemove.trim();
+    const nextKeys = userApiKeys.filter((k) => k !== cleanTarget);
+    setUserApiKeysState(nextKeys);
+    persistUserApiKeys(nextKeys);
+  }, [userApiKeys, persistUserApiKeys]);
+
+  const clearUserApiKeys = useCallback(() => {
+    setUserApiKeysState([]);
+    persistUserApiKeys([]);
+  }, [persistUserApiKeys]);
 
   // Collections state
   const [users, setUsers] = useState<UserSession[]>(DEFAULT_USERS);
@@ -206,99 +318,232 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [loginLogs, setLoginLogs] = useState<LoginAuditLog[]>(DEFAULT_LOGIN_LOGS);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Initialize from localStorage
+  // Initialize from localStorage & setup Multi-Tab Synchronization
   useEffect(() => {
-    try {
-      const dedupeById = <T extends { id?: string; accessCode?: string }>(items: T[]): T[] => {
-        if (!Array.isArray(items)) return [];
-        const seen = new Set<string>();
-        return items.filter((item, idx) => {
-          const key = item.id || item.accessCode || `item_${idx}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-      };
+    const dedupeById = <T extends { id?: string; accessCode?: string }>(items: T[]): T[] => {
+      if (!Array.isArray(items)) return [];
+      const seen = new Set<string>();
+      return items.filter((item, idx) => {
+        const key = item.id || item.accessCode || `item_${idx}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
 
-      const savedUsers = localStorage.getItem(STORAGE_KEYS.USERS);
-      if (savedUsers) setUsers(dedupeById(JSON.parse(savedUsers)));
+    const loadLocalData = () => {
+      try {
+        const savedUsers = localStorage.getItem(STORAGE_KEYS.USERS);
+        if (savedUsers) setUsers(dedupeById(JSON.parse(savedUsers)));
 
-      const savedTransactions = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-      if (savedTransactions) setTransactions(dedupeById(JSON.parse(savedTransactions)));
+        const savedTransactions = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
+        if (savedTransactions) setTransactions(dedupeById(JSON.parse(savedTransactions)));
 
-      const savedPackages = localStorage.getItem(STORAGE_KEYS.PACKAGES);
-      if (savedPackages) setPackages(dedupeById(JSON.parse(savedPackages)));
+        const savedPackages = localStorage.getItem(STORAGE_KEYS.PACKAGES);
+        if (savedPackages) setPackages(dedupeById(JSON.parse(savedPackages)));
 
-      const savedSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      if (savedSettings) setSettings(JSON.parse(savedSettings));
+        const savedSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+        if (savedSettings) setSettings(JSON.parse(savedSettings));
 
-      const savedHistory = localStorage.getItem(STORAGE_KEYS.HISTORY);
-      if (savedHistory) setHistory(dedupeById(JSON.parse(savedHistory)));
+        const savedHistory = localStorage.getItem(STORAGE_KEYS.HISTORY);
+        if (savedHistory) setHistory(dedupeById(JSON.parse(savedHistory)));
 
-      const savedSkills = localStorage.getItem(STORAGE_KEYS.SKILLS);
-      if (savedSkills) setMemorySkills(dedupeById(JSON.parse(savedSkills)));
+        const savedSkills = localStorage.getItem(STORAGE_KEYS.SKILLS);
+        if (savedSkills) setMemorySkills(dedupeById(JSON.parse(savedSkills)));
 
-      const savedRules = localStorage.getItem(STORAGE_KEYS.RULES);
-      if (savedRules) setKnowledgeRules(dedupeById(JSON.parse(savedRules)));
+        const savedRules = localStorage.getItem(STORAGE_KEYS.RULES);
+        if (savedRules) setKnowledgeRules(dedupeById(JSON.parse(savedRules)));
 
-      const savedAgents = localStorage.getItem(STORAGE_KEYS.AGENTS);
-      if (savedAgents) setAiAgents(dedupeById(JSON.parse(savedAgents)));
+        const savedAgents = localStorage.getItem(STORAGE_KEYS.AGENTS);
+        if (savedAgents) setAiAgents(dedupeById(JSON.parse(savedAgents)));
 
-      const savedSafe = localStorage.getItem(STORAGE_KEYS.SAFE_LEARNING);
-      if (savedSafe) setSafeLearning(dedupeById(JSON.parse(savedSafe)));
+        const savedSafe = localStorage.getItem(STORAGE_KEYS.SAFE_LEARNING);
+        if (savedSafe) setSafeLearning(dedupeById(JSON.parse(savedSafe)));
 
-      const savedLive = localStorage.getItem(STORAGE_KEYS.LIVE_EVENTS);
-      if (savedLive) setLiveEvents(dedupeById(JSON.parse(savedLive)));
+        const savedLive = localStorage.getItem(STORAGE_KEYS.LIVE_EVENTS);
+        if (savedLive) setLiveEvents(dedupeById(JSON.parse(savedLive)));
 
-      const savedLogs = localStorage.getItem(STORAGE_KEYS.LOGIN_LOGS);
-      if (savedLogs) setLoginLogs(dedupeById(JSON.parse(savedLogs)));
+        const savedLogs = localStorage.getItem(STORAGE_KEYS.LOGIN_LOGS);
+        if (savedLogs) setLoginLogs(dedupeById(JSON.parse(savedLogs)));
 
-      const savedApiKey = localStorage.getItem(STORAGE_KEYS.USER_API_KEY);
-      if (savedApiKey) setUserApiKeyState(savedApiKey);
-
-      const savedSession = localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION);
-      if (savedSession) {
-        const user = JSON.parse(savedSession);
-        // If user is globallensn@gmail.com ensure role is superadmin
-        if (user.email === 'globallensn@gmail.com') {
-          user.role = 'superadmin';
-          user.name = 'Global Lens Admin';
+        const savedApiKey = localStorage.getItem(STORAGE_KEYS.USER_API_KEYS) || localStorage.getItem(STORAGE_KEYS.USER_API_KEY);
+        if (savedApiKey) {
+          const list: string[] = [];
+          if (savedApiKey.trim().startsWith('[')) {
+            try {
+              const parsed = JSON.parse(savedApiKey);
+              if (Array.isArray(parsed)) {
+                for (const item of parsed) {
+                  const s = sanitizeSingleApiKey(item);
+                  if (s && !list.includes(s)) list.push(s);
+                }
+              }
+            } catch {}
+          }
+          if (list.length === 0) {
+            const split = savedApiKey.split(/[\r\n,;]+/);
+            for (const item of split) {
+              const s = sanitizeSingleApiKey(item);
+              if (s && !list.includes(s)) list.push(s);
+            }
+          }
+          setUserApiKeysState(list);
         }
-        setCurrentUser(user);
+
+        const savedSession = localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION);
+        if (savedSession) {
+          const user: UserSession = JSON.parse(savedSession);
+          if (user.email === 'globallensn@gmail.com' || user.email === 'ahmaddavid0906@gmail.com') {
+            user.role = 'superadmin';
+          }
+          // Recalculate days remaining
+          if (user.role !== 'superadmin' && user.expiresAt) {
+            const now = Date.now();
+            const exp = new Date(user.expiresAt).getTime();
+            const diffDays = Math.max(0, Math.ceil((exp - now) / 86400000));
+            user.daysRemaining = diffDays;
+            if (diffDays <= 0) {
+              user.status = 'expired';
+            }
+          }
+          setCurrentUser(user);
+
+          // Auto-migrate & load user-scoped history and API key
+          migrateLegacyToScopedStorage(STORAGE_KEYS.HISTORY, user.accessCode);
+          migrateLegacyToScopedStorage(STORAGE_KEYS.USER_API_KEY, user.accessCode);
+
+          const scopedHistoryKey = getScopedStorageKey(STORAGE_KEYS.HISTORY, user.accessCode);
+          const scopedHistory = localStorage.getItem(scopedHistoryKey);
+          if (scopedHistory) {
+            setHistory(dedupeById(JSON.parse(scopedHistory)));
+          }
+
+        // Load API Keys (Support multi-key and legacy format)
+        try {
+          const scopedKeysKey = getScopedStorageKey(STORAGE_KEYS.USER_API_KEYS, user.accessCode);
+          const scopedKeyKey = getScopedStorageKey(STORAGE_KEYS.USER_API_KEY, user.accessCode);
+
+          let saved = localStorage.getItem(scopedKeysKey) || localStorage.getItem(scopedKeyKey);
+          if (!saved) {
+            saved = localStorage.getItem(STORAGE_KEYS.USER_API_KEYS) || localStorage.getItem(STORAGE_KEYS.USER_API_KEY);
+          }
+
+          if (saved) {
+            const list: string[] = [];
+            if (saved.trim().startsWith('[')) {
+              try {
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed)) {
+                  for (const item of parsed) {
+                    const s = sanitizeSingleApiKey(item);
+                    if (s && !list.includes(s)) list.push(s);
+                  }
+                }
+              } catch {}
+            }
+            if (list.length === 0) {
+              const split = saved.split(/[\r\n,;]+/);
+              for (const item of split) {
+                const s = sanitizeSingleApiKey(item);
+                if (s && !list.includes(s)) list.push(s);
+              }
+            }
+            setUserApiKeysState(list);
+          }
+        } catch {}
+
         setCurrentView(user.role === 'superadmin' ? 'admin' : 'dashboard');
-      } else {
-        // Halaman awal saat pertama kali dibuka (belum login)
-        setCurrentUser(null);
-        setCurrentView('login');
+        } else {
+          setCurrentUser(null);
+          setCurrentView('login');
+        }
+      } catch (e) {
+        console.warn('LocalStorage read error:', e);
       }
-    } catch (e) {
-      console.warn('LocalStorage read error:', e);
-    }
-    setIsLoaded(true);
+      setIsLoaded(true);
+    };
+
+    loadLocalData();
+
+    // Multi-tab sync event listener
+    const handleStorageChange = (e: StorageEvent) => {
+      if (!e.key) return;
+      try {
+        if (e.key === STORAGE_KEYS.PACKAGES && e.newValue) {
+          setPackages(dedupeById(JSON.parse(e.newValue)));
+        } else if (e.key === STORAGE_KEYS.USERS && e.newValue) {
+          setUsers(dedupeById(JSON.parse(e.newValue)));
+        } else if (e.key === STORAGE_KEYS.SETTINGS && e.newValue) {
+          setSettings(JSON.parse(e.newValue));
+        } else if (e.key === STORAGE_KEYS.TRANSACTIONS && e.newValue) {
+          setTransactions(dedupeById(JSON.parse(e.newValue)));
+        } else if (e.key === STORAGE_KEYS.CURRENT_SESSION) {
+          if (!e.newValue) {
+            setCurrentUser(null);
+            setCurrentView('login');
+          } else {
+            setCurrentUser(JSON.parse(e.newValue));
+          }
+        }
+      } catch (err) {
+        console.warn('Multi-tab sync notice:', err);
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
-  // Save to localStorage when state updates
+  // Save to localStorage when state updates with quota-safe helper
   useEffect(() => {
     if (!isLoaded) return;
     try {
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
-      localStorage.setItem(STORAGE_KEYS.PACKAGES, JSON.stringify(packages));
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-      localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(history));
-      localStorage.setItem(STORAGE_KEYS.SKILLS, JSON.stringify(memorySkills));
-      localStorage.setItem(STORAGE_KEYS.RULES, JSON.stringify(knowledgeRules));
-      localStorage.setItem(STORAGE_KEYS.AGENTS, JSON.stringify(aiAgents));
-      localStorage.setItem(STORAGE_KEYS.SAFE_LEARNING, JSON.stringify(safeLearning));
-      localStorage.setItem(STORAGE_KEYS.LIVE_EVENTS, JSON.stringify(liveEvents));
-      localStorage.setItem(STORAGE_KEYS.LOGIN_LOGS, JSON.stringify(loginLogs));
+      safeSetStorage(STORAGE_KEYS.USERS, JSON.stringify(users));
+      safeSetStorage(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+      safeSetStorage(STORAGE_KEYS.PACKAGES, JSON.stringify(packages));
+      safeSetStorage(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+      safeSetStorage(STORAGE_KEYS.HISTORY, JSON.stringify(history.slice(0, 40)));
+      if (currentUser?.accessCode) {
+        const scopedHistoryKey = getScopedStorageKey(STORAGE_KEYS.HISTORY, currentUser.accessCode);
+        safeSetStorage(scopedHistoryKey, JSON.stringify(history.slice(0, 40)));
+      }
+      safeSetStorage(STORAGE_KEYS.SKILLS, JSON.stringify(memorySkills));
+      safeSetStorage(STORAGE_KEYS.RULES, JSON.stringify(knowledgeRules));
+      safeSetStorage(STORAGE_KEYS.AGENTS, JSON.stringify(aiAgents));
+      safeSetStorage(STORAGE_KEYS.SAFE_LEARNING, JSON.stringify(safeLearning));
+      safeSetStorage(STORAGE_KEYS.LIVE_EVENTS, JSON.stringify(liveEvents.slice(0, 30)));
+      safeSetStorage(STORAGE_KEYS.LOGIN_LOGS, JSON.stringify(loginLogs.slice(0, 30)));
     } catch (e) {
       console.warn('LocalStorage write error:', e);
     }
-  }, [users, transactions, packages, settings, history, memorySkills, knowledgeRules, aiAgents, safeLearning, liveEvents, loginLogs, isLoaded]);
+  }, [users, transactions, packages, settings, history, memorySkills, knowledgeRules, aiAgents, safeLearning, liveEvents, loginLogs, isLoaded, currentUser?.accessCode]);
+
+  // Audit logs & user updates (declared early for auth methods)
+  const addLoginLog = useCallback((log: Omit<LoginAuditLog, 'id' | 'timestamp'>) => {
+    const newLog: LoginAuditLog = {
+      ...log,
+      id: `log_${Date.now()}`,
+      timestamp: new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })
+    };
+    setLoginLogs((prev) => [newLog, ...prev.slice(0, 50)]);
+  }, []);
+
+  const updateUser = useCallback((accessCode: string, updates: Partial<UserSession>) => {
+    setUsers((prev) =>
+      prev.map((u) => (u.accessCode === accessCode ? { ...u, ...updates } : u))
+    );
+    setCurrentUser((prev) => {
+      if (prev && prev.accessCode === accessCode) {
+        const updated = { ...prev, ...updates };
+        safeSetStorage(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(updated));
+        return updated;
+      }
+      return prev;
+    });
+  }, []);
 
   // Auth methods
-  const loginWithCode = (code: string) => {
+  const loginWithCode = useCallback((code: string) => {
     const cleanCode = code.trim().toUpperCase();
     const cleanEmail = code.trim().toLowerCase();
 
@@ -329,7 +574,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createdAt: '2026-01-01T00:00:00Z'
       };
       setCurrentUser(adminUser);
-      localStorage.setItem(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(adminUser));
+      safeSetStorage(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(adminUser));
       setCurrentView('admin');
 
       addLoginLog({
@@ -352,15 +597,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     if (foundUser) {
+      // Dynamic live expiry check
+      if (foundUser.role !== 'superadmin' && foundUser.expiresAt) {
+        const now = Date.now();
+        const exp = new Date(foundUser.expiresAt).getTime();
+        const diffDays = Math.max(0, Math.ceil((exp - now) / 86400000));
+        foundUser.daysRemaining = diffDays;
+        if (diffDays <= 0) {
+          foundUser.status = 'expired';
+          updateUser(foundUser.accessCode, { status: 'expired', daysRemaining: 0 });
+        }
+      }
+
       if (foundUser.status === 'suspended') {
         return { success: false, message: 'Akun Anda sedang ditangguhkan. Silakan hubungi admin via WhatsApp.' };
       }
-      if (foundUser.status === 'expired') {
+      if (foundUser.status === 'expired' || (foundUser.role !== 'superadmin' && foundUser.daysRemaining <= 0)) {
         return { success: false, message: 'Masa aktif Kode Akses telah habis. Silakan perpanjang paket lisensi Anda.' };
       }
 
       setCurrentUser(foundUser);
-      localStorage.setItem(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(foundUser));
+      safeSetStorage(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(foundUser));
       setCurrentView(foundUser.role === 'superadmin' ? 'admin' : 'dashboard');
 
       addLoginLog({
@@ -372,6 +629,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         detail: 'Otentikasi berhasil via Kode Akses'
       });
 
+      // Load scoped user data
+      migrateLegacyToScopedStorage(STORAGE_KEYS.HISTORY, foundUser.accessCode);
+      migrateLegacyToScopedStorage(STORAGE_KEYS.USER_API_KEY, foundUser.accessCode);
+      migrateLegacyToScopedStorage(STORAGE_KEYS.USER_API_KEYS, foundUser.accessCode);
+      const scopedHist = localStorage.getItem(getScopedStorageKey(STORAGE_KEYS.HISTORY, foundUser.accessCode));
+      if (scopedHist) {
+        try { setHistory(JSON.parse(scopedHist)); } catch {}
+      }
+      try {
+        const scopedKeysKey = getScopedStorageKey(STORAGE_KEYS.USER_API_KEYS, foundUser.accessCode);
+        const scopedKeyKey = getScopedStorageKey(STORAGE_KEYS.USER_API_KEY, foundUser.accessCode);
+        let saved = localStorage.getItem(scopedKeysKey) || localStorage.getItem(scopedKeyKey);
+        if (saved) {
+          const list: string[] = [];
+          if (saved.trim().startsWith('[')) {
+            try {
+              const parsed = JSON.parse(saved);
+              if (Array.isArray(parsed)) {
+                for (const item of parsed) {
+                  const s = sanitizeSingleApiKey(item);
+                  if (s && !list.includes(s)) list.push(s);
+                }
+              }
+            } catch {}
+          }
+          if (list.length === 0) {
+            const split = saved.split(/[\r\n,;]+/);
+            for (const item of split) {
+              const s = sanitizeSingleApiKey(item);
+              if (s && !list.includes(s)) list.push(s);
+            }
+          }
+          setUserApiKeysState(list);
+        } else {
+          setUserApiKeysState([]);
+        }
+      } catch {}
+
       return { success: true, message: `Selamat datang di Workspace, ${foundUser.name}!`, role: foundUser.role };
     }
 
@@ -379,11 +674,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       success: false,
       message: 'Kode Akses / Email tidak terdaftar atau belum aktif. Periksa kembali atau beli paket lisensi.'
     };
-  };
+  }, [users, addLoginLog, updateUser]);
 
   const logout = () => {
     setCurrentUser(null);
-    localStorage.removeItem(STORAGE_KEYS.CURRENT_SESSION);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.CURRENT_SESSION);
+    } catch {}
     setCurrentView('login');
   };
 
@@ -391,7 +688,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const target = accessCode ? users.find((u) => u.accessCode === accessCode) : users.find(u => u.role === 'user') || DEFAULT_USERS[1];
     if (target) {
       setCurrentUser(target);
-      localStorage.setItem(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(target));
+      safeSetStorage(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(target));
+      migrateLegacyToScopedStorage(STORAGE_KEYS.HISTORY, target.accessCode);
+      migrateLegacyToScopedStorage(STORAGE_KEYS.USER_API_KEY, target.accessCode);
+      migrateLegacyToScopedStorage(STORAGE_KEYS.USER_API_KEYS, target.accessCode);
+      const scopedHist = localStorage.getItem(getScopedStorageKey(STORAGE_KEYS.HISTORY, target.accessCode));
+      if (scopedHist) {
+        try { setHistory(JSON.parse(scopedHist)); } catch {}
+      }
+      try {
+        const scopedKeysKey = getScopedStorageKey(STORAGE_KEYS.USER_API_KEYS, target.accessCode);
+        const scopedKeyKey = getScopedStorageKey(STORAGE_KEYS.USER_API_KEY, target.accessCode);
+        let saved = localStorage.getItem(scopedKeysKey) || localStorage.getItem(scopedKeyKey);
+        if (saved) {
+          const list: string[] = [];
+          if (saved.trim().startsWith('[')) {
+            try {
+              const parsed = JSON.parse(saved);
+              if (Array.isArray(parsed)) {
+                for (const item of parsed) {
+                  const s = sanitizeSingleApiKey(item);
+                  if (s && !list.includes(s)) list.push(s);
+                }
+              }
+            } catch {}
+          }
+          if (list.length === 0) {
+            const split = saved.split(/[\r\n,;]+/);
+            for (const item of split) {
+              const s = sanitizeSingleApiKey(item);
+              if (s && !list.includes(s)) list.push(s);
+            }
+          }
+          setUserApiKeysState(list);
+        } else {
+          setUserApiKeysState([]);
+        }
+      } catch {}
       setCurrentView('dashboard');
     }
   };
@@ -399,7 +732,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const quickSwitchToAdmin = () => {
     const adminUser = users.find((u) => u.role === 'superadmin') || DEFAULT_USERS[0];
     setCurrentUser(adminUser);
-    localStorage.setItem(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(adminUser));
+    safeSetStorage(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(adminUser));
+    migrateLegacyToScopedStorage(STORAGE_KEYS.HISTORY, adminUser.accessCode);
+    migrateLegacyToScopedStorage(STORAGE_KEYS.USER_API_KEY, adminUser.accessCode);
+    migrateLegacyToScopedStorage(STORAGE_KEYS.USER_API_KEYS, adminUser.accessCode);
+    const scopedHist = localStorage.getItem(getScopedStorageKey(STORAGE_KEYS.HISTORY, adminUser.accessCode));
+    if (scopedHist) {
+      try { setHistory(JSON.parse(scopedHist)); } catch {}
+    }
+    try {
+      const scopedKeysKey = getScopedStorageKey(STORAGE_KEYS.USER_API_KEYS, adminUser.accessCode);
+      const scopedKeyKey = getScopedStorageKey(STORAGE_KEYS.USER_API_KEY, adminUser.accessCode);
+      let saved = localStorage.getItem(scopedKeysKey) || localStorage.getItem(scopedKeyKey);
+      if (saved) {
+        const list: string[] = [];
+        if (saved.trim().startsWith('[')) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) {
+              for (const item of parsed) {
+                const s = sanitizeSingleApiKey(item);
+                if (s && !list.includes(s)) list.push(s);
+              }
+            }
+          } catch {}
+        }
+        if (list.length === 0) {
+          const split = saved.split(/[\r\n,;]+/);
+          for (const item of split) {
+            const s = sanitizeSingleApiKey(item);
+            if (s && !list.includes(s)) list.push(s);
+          }
+        }
+        setUserApiKeysState(list);
+      } else {
+        setUserApiKeysState([]);
+      }
+    } catch {}
     setCurrentView('admin');
   };
 
@@ -537,17 +906,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newUser;
   };
 
-  const updateUser = (accessCode: string, updates: Partial<UserSession>) => {
-    setUsers((prev) =>
-      prev.map((u) => (u.accessCode === accessCode ? { ...u, ...updates } : u))
-    );
-    if (currentUser && currentUser.accessCode === accessCode) {
-      const updated = { ...currentUser, ...updates };
-      setCurrentUser(updated);
-      localStorage.setItem(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(updated));
-    }
-  };
-
   const deleteUser = (accessCode: string) => {
     setUsers((prev) => prev.filter((u) => u.accessCode !== accessCode));
   };
@@ -608,7 +966,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `hist_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
       createdAt: new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })
     };
-    setHistory((prev) => [newItem, ...prev]);
+    setHistory((prev) => [newItem, ...prev.slice(0, 39)]);
 
     // Increment user usage counter
     if (currentUser) {
@@ -756,15 +1114,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const clearLiveEvents = () => setLiveEvents([]);
 
-  const addLoginLog = (log: Omit<LoginAuditLog, 'id' | 'timestamp'>) => {
-    const newLog: LoginAuditLog = {
-      ...log,
-      id: `log_${Date.now()}`,
-      timestamp: new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })
-    };
-    setLoginLogs((prev) => [newLog, ...prev.slice(0, 50)]);
-  };
-
   const clearLoginLogs = () => setLoginLogs([]);
 
   // Backup and restore
@@ -829,7 +1178,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSharedPayload,
         sendToTool,
         userApiKey,
+        userApiKeys,
         setUserApiKey,
+        setUserApiKeys,
+        addUserApiKeys,
+        removeUserApiKey,
+        clearUserApiKeys,
         users,
         addUser,
         updateUser,

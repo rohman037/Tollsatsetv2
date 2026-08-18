@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '@/lib/app-context';
+import { ApiClient } from '@/services/client/api-client';
+import { GEMINI_MODELS } from '@/server/config/model-tiers.config';
 import {
   Film,
   Sparkles,
@@ -74,26 +76,42 @@ export const VideoToPromptView: React.FC = () => {
   const handleProcessVideo = async () => {
     setLoading(true);
     try {
-      const promptQuery =
+      let promptQuery =
         inputMethod === 'tiktok'
           ? tiktokUrl || sharedPayload.videoTitle || 'Video Kreator Viral TikTok'
           : uploadedVideoName || 'Berkas Video Unggahan';
 
-      const res = await fetch('/api/gemini/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskType: 'video_to_prompt',
-          prompt: `Judul / Sumber: ${promptQuery}\nCaption: ${sharedPayload.videoCaption || tiktokUrl}`,
-          customApiKey: userApiKey || undefined,
-          extraData: {
-            splitDuration,
-            model: engineModel === 'Gemini 3.6 Flash' ? 'gemini-3.7-flash' : 'gemini-3.1-pro-preview',
-            elementsIncluded
+      let enrichedCaption = sharedPayload.videoCaption || '';
+      let enrichedAuthor = '';
+
+      if (inputMethod === 'tiktok' && tiktokUrl.trim().startsWith('http')) {
+        try {
+          const ttInfo = await ApiClient.scrapeTikTok({ url: tiktokUrl.trim() });
+          if (ttInfo.success && ttInfo.data) {
+            enrichedCaption = ttInfo.data.caption || ttInfo.data.title || enrichedCaption;
+            enrichedAuthor = ttInfo.data.authorHandle || ttInfo.data.authorName || '';
+            promptQuery = `Video TikTok oleh ${enrichedAuthor || 'Kreator'}: ${enrichedCaption.substring(0, 100)}`;
           }
-        })
-      });
-      const data = await res.json();
+        } catch {}
+      }
+
+      const selectedModel = engineModel === 'Gemini 3.6 Flash' ? GEMINI_MODELS.FLASH : GEMINI_MODELS.PRO;
+      const mediaList = inputMethod === 'upload' && uploadedVideoFile ? [uploadedVideoFile] : [];
+
+      const data = await ApiClient.generateAiWithMedia(
+        'video_to_prompt',
+        `Judul / Sumber: ${promptQuery}\nCaption / Konteks: ${enrichedCaption || tiktokUrl}`,
+        mediaList,
+        {
+          splitDuration,
+          model: selectedModel,
+          modelEngine: selectedModel,
+          elementsIncluded,
+          videoUrl: inputMethod === 'tiktok' ? tiktokUrl : undefined,
+        },
+        userApiKey || undefined
+      );
+
       let finalResult = null;
 
       if (data && data.success && data.data && Array.isArray(data.data.segments)) {
